@@ -1,0 +1,1325 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>Three.js Final Project - Helicopter On A Helipad</title>
+    <style>
+        :root {
+            color-scheme: dark;
+        }
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+            background: #050607;
+            cursor: crosshair;
+        }
+
+        #hud {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            padding: 10px 12px;
+            background: rgba(0, 0, 0, 0.55);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            color: #f3f6ff;
+            font-size: 13px;
+            line-height: 1.45;
+            border-radius: 8px;
+            user-select: none;
+        }
+
+        #hud b {
+            color: #ffe084;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="hud">
+        <div><b>Keyboard:</b> A/D = move camera around helicopter</div>
+        <div><b>Keyboard:</b> W/S = camera height, Q/E = zoom in/out</div>
+        <div><b>Keyboard:</b> Arrows = move helicopter left/right/forward/back</div>
+        <div><b>Keyboard:</b> O/P = lift/lower helicopter, 0/9 = start/stop wing rotation</div>
+        <div><b>Mouse:</b> move = light position, wheel = light height</div>
+    </div>
+
+    <!-- Three.js renders the 3D scene. GLTFLoader loads the helicopter model. -->
+    <script src="js/three.js"></script>
+    <script src="js/GLTFLoader.js"></script>
+    <script src="js/DRACOLoader.js"></script>
+
+    <!-- Custom shaders are used for the helipad so the mouse-controlled point light affects it clearly. -->
+    <script id="litVertex" type="x-shader/x-vertex">
+        varying vec2 vUv;
+        varying vec3 vNormal;
+        varying vec3 vWorldPos;
+
+        void main() {
+            vUv = uv;
+            vNormal = normalize(normalMatrix * normal);
+
+            vec4 worldPos = modelMatrix * vec4(position, 1.0);
+            vWorldPos = worldPos.xyz;
+
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    </script>
+
+    <script id="litFragment" type="x-shader/x-fragment">
+        uniform sampler2D uTexture;
+        uniform vec3 uLightPos;
+        uniform vec3 uLightColor;
+        uniform vec3 uAmbientColor;
+        uniform vec3 uTint;
+        uniform vec3 uViewPos;
+        uniform vec2 uUvScale;
+        uniform vec2 uUvOffset;
+
+        varying vec2 vUv;
+        varying vec3 vNormal;
+        varying vec3 vWorldPos;
+
+        void main() {
+            vec2 sampleUv = vUv * uUvScale + uUvOffset;
+            vec3 texColor = texture2D(uTexture, sampleUv).rgb;
+            vec3 base = texColor * uTint;
+
+            vec3 N = normalize(vNormal);
+            vec3 L = normalize(uLightPos - vWorldPos);
+            vec3 V = normalize(uViewPos - vWorldPos);
+            vec3 H = normalize(L + V);
+
+            float diff = max(dot(N, L), 0.0);
+            float spec = pow(max(dot(N, H), 0.0), 30.0);
+
+            vec3 lit = base * (uAmbientColor + diff * uLightColor) + (0.22 * spec * uLightColor);
+            gl_FragColor = vec4(lit, 1.0);
+        }
+    </script>
+
+    <script>
+        // Basic Three.js setup: scene holds objects, renderer draws them, camera views them.
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x9fcff2);
+        scene.fog = new THREE.Fog(0xbfdcf0, 120, 260);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio || 1);
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        document.body.appendChild(renderer.domElement);
+
+        // Perspective projection gives depth, like a real camera lens.
+        const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 500);
+
+        // These values control the camera orbit around the center helicopter position.
+        const cameraOrbit = {
+            angle: 0,
+            radius: 12,
+            height: 4
+        };
+
+        function updateCamera() {
+            // Convert orbit angle/radius into a camera position around the scene center.
+            camera.position.x = Math.cos(cameraOrbit.angle) * cameraOrbit.radius;
+            camera.position.z = Math.sin(cameraOrbit.angle) * cameraOrbit.radius;
+            camera.position.y = cameraOrbit.height;
+            camera.lookAt(0, 1.25, 0);
+        }
+
+        updateCamera();
+
+        function createSkyTexture() {
+            // A canvas texture makes the sky without needing an external image file.
+            const width = 2048;
+            const height = 1024;
+            const c = document.createElement("canvas");
+            c.width = width;
+            c.height = height;
+            const g = c.getContext("2d");
+
+            const skyGradient = g.createLinearGradient(0, 0, 0, height);
+            skyGradient.addColorStop(0, "#7fc4f4");
+            skyGradient.addColorStop(0.42, "#a9d8f6");
+            skyGradient.addColorStop(0.72, "#d7ecfb");
+            skyGradient.addColorStop(1, "#f4fbff");
+            g.fillStyle = skyGradient;
+            g.fillRect(0, 0, width, height);
+
+            const horizonGlow = g.createLinearGradient(0, height * 0.52, 0, height);
+            horizonGlow.addColorStop(0, "rgba(255,255,255,0)");
+            horizonGlow.addColorStop(0.62, "rgba(255,255,255,0.24)");
+            horizonGlow.addColorStop(1, "rgba(255,255,255,0.42)");
+            g.fillStyle = horizonGlow;
+            g.fillRect(0, 0, width, height);
+
+            const tex = new THREE.CanvasTexture(c);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.ClampToEdgeWrapping;
+            tex.encoding = THREE.sRGBEncoding;
+            return tex;
+        }
+
+        function createMoonGlowTexture() {
+            // A radial gradient sprite creates a soft glow around the moon.
+            const size = 256;
+            const c = document.createElement("canvas");
+            c.width = size;
+            c.height = size;
+            const g = c.getContext("2d");
+            const glow = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+            glow.addColorStop(0, "rgba(255,246,218,0.9)");
+            glow.addColorStop(0.26, "rgba(255,238,190,0.42)");
+            glow.addColorStop(1, "rgba(255,238,190,0)");
+            g.fillStyle = glow;
+            g.fillRect(0, 0, size, size);
+
+            const tex = new THREE.CanvasTexture(c);
+            tex.encoding = THREE.sRGBEncoding;
+            return tex;
+        }
+
+        function createCloudTexture() {
+            // Several overlapping transparent ellipses make one reusable cloud texture.
+            const size = 512;
+            const c = document.createElement("canvas");
+            c.width = size;
+            c.height = size;
+            const g = c.getContext("2d");
+
+            g.clearRect(0, 0, size, size);
+            g.globalCompositeOperation = "source-over";
+
+            const puffs = [
+                [150, 270, 110, 42],
+                [230, 230, 150, 58],
+                [330, 270, 125, 46],
+                [265, 295, 190, 45],
+                [105, 305, 90, 30],
+                [405, 310, 95, 32]
+            ];
+
+            for (let i = 0; i < puffs.length; i++) {
+                const puff = puffs[i];
+                const gradient = g.createRadialGradient(puff[0], puff[1], 8, puff[0], puff[1], puff[2]);
+                gradient.addColorStop(0, "rgba(235,243,255,0.46)");
+                gradient.addColorStop(0.52, "rgba(190,210,226,0.25)");
+                gradient.addColorStop(1, "rgba(190,210,226,0)");
+                g.fillStyle = gradient;
+                g.beginPath();
+                g.ellipse(puff[0], puff[1], puff[2], puff[3], 0, 0, Math.PI * 2);
+                g.fill();
+            }
+
+            const tex = new THREE.CanvasTexture(c);
+            tex.encoding = THREE.sRGBEncoding;
+            return tex;
+        }
+
+        function createStarField() {
+            // Stars are real points in the scene. The shader changes brightness over time.
+            const starCount = 620;
+            const positions = new Float32Array(starCount * 3);
+            const phases = new Float32Array(starCount);
+            const speeds = new Float32Array(starCount);
+            const sizes = new Float32Array(starCount);
+            const radius = 205;
+            const moonDirection = moonPosition.clone().normalize();
+            const moonClearCos = Math.cos(THREE.MathUtils.degToRad(24));
+            const moonSoftCos = Math.cos(THREE.MathUtils.degToRad(38));
+            const candidateDirection = new THREE.Vector3();
+
+            for (let i = 0; i < starCount; i++) {
+                const i3 = i * 3;
+                let x = 0;
+                let y = 0;
+                let z = 0;
+                let accepted = false;
+
+                while (!accepted) {
+                    // Pick a sky direction, but keep most stars away from the moon glow.
+                    const elevation = THREE.MathUtils.degToRad(5 + Math.random() * 48);
+                    const azimuth = i < starCount * 0.52
+                        ? Math.PI * 1.5 + (Math.random() - 0.5) * 1.35
+                        : Math.random() * Math.PI * 2;
+                    const distance = radius - Math.random() * 18;
+
+                    x = Math.cos(elevation) * Math.sin(azimuth) * distance;
+                    y = Math.sin(elevation) * distance;
+                    z = Math.cos(elevation) * Math.cos(azimuth) * distance;
+
+                    candidateDirection.set(x, y, z).normalize();
+                    const moonCloseness = candidateDirection.dot(moonDirection);
+
+                    if (moonCloseness > moonClearCos) {
+                        continue;
+                    }
+
+                    accepted = moonCloseness <= moonSoftCos || Math.random() > 0.9;
+                }
+
+                positions[i3] = x;
+                positions[i3 + 1] = y;
+                positions[i3 + 2] = z;
+                phases[i] = Math.random() * Math.PI * 2;
+                speeds[i] = 0.7 + Math.random() * 1.8;
+                sizes[i] = 2.3 + Math.random() * 2.6;
+            }
+
+            const geometry = new THREE.BufferGeometry();
+            // Custom per-star attributes let the shader give each star its own twinkle.
+            geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute("aPhase", new THREE.BufferAttribute(phases, 1));
+            geometry.setAttribute("aSpeed", new THREE.BufferAttribute(speeds, 1));
+            geometry.setAttribute("aBaseSize", new THREE.BufferAttribute(sizes, 1));
+
+            const material = new THREE.ShaderMaterial({
+                uniforms: {
+                    uTime: { value: 0 },
+                    uPixelRatio: { value: renderer.getPixelRatio() }
+                },
+                vertexShader: [
+                    "attribute float aPhase;",
+                    "attribute float aSpeed;",
+                    "attribute float aBaseSize;",
+                    "uniform float uTime;",
+                    "uniform float uPixelRatio;",
+                    "varying float vAlpha;",
+                    "void main() {",
+                    "    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);",
+                    "    float twinkle = 0.55 + 0.45 * sin(uTime * aSpeed + aPhase);",
+                    "    vAlpha = 0.34 + twinkle * 0.66;",
+                    "    gl_PointSize = aBaseSize * uPixelRatio * (260.0 / -mvPosition.z);",
+                    "    gl_Position = projectionMatrix * mvPosition;",
+                    "}"
+                ].join("\n"),
+                fragmentShader: [
+                    "varying float vAlpha;",
+                    "void main() {",
+                    "    vec2 p = gl_PointCoord - vec2(0.5);",
+                    "    float d = length(p);",
+                    "    float glow = smoothstep(0.5, 0.0, d);",
+                    "    float core = smoothstep(0.17, 0.0, d);",
+                    "    float alpha = (glow * 0.58 + core * 0.86) * vAlpha;",
+                    "    gl_FragColor = vec4(0.88, 0.94, 1.0, alpha);",
+                    "}"
+                ].join("\n"),
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                fog: false
+            });
+
+            const stars = new THREE.Points(geometry, material);
+            stars.name = "Twinkling Star Field";
+            return stars;
+        }
+
+        // The sky is a large sphere viewed from the inside.
+        const skyDome = new THREE.Mesh(
+            new THREE.SphereGeometry(220, 64, 32),
+            new THREE.MeshBasicMaterial({
+                map: createSkyTexture(),
+                side: THREE.BackSide,
+                fog: false,
+                depthWrite: false
+            })
+        );
+        skyDome.name = "Procedural Sky Dome";
+        scene.add(skyDome);
+
+        const moonPosition = new THREE.Vector3(-92, 22, -18);
+        const moon = new THREE.Mesh(
+            new THREE.SphereGeometry(4.2, 32, 16),
+            new THREE.MeshBasicMaterial({ color: 0xfff4d6, fog: false })
+        );
+        moon.name = "Moon";
+        moon.position.copy(moonPosition);
+        moon.visible = false;
+        scene.add(moon);
+
+        const moonGlow = new THREE.Sprite(
+            new THREE.SpriteMaterial({
+                map: createMoonGlowTexture(),
+                transparent: true,
+                depthWrite: false,
+                opacity: 0.9,
+                blending: THREE.AdditiveBlending,
+                fog: false
+            })
+        );
+        moonGlow.name = "Moon Glow";
+        moonGlow.position.copy(moonPosition);
+        moonGlow.scale.set(38, 38, 1);
+        moonGlow.visible = false;
+        scene.add(moonGlow);
+
+        const sunLight = new THREE.DirectionalLight(0xfff1c8, 0.85);
+        sunLight.position.set(-80, 90, 45);
+        scene.add(sunLight);
+
+        const starField = createStarField();
+        starField.visible = false;
+        scene.add(starField);
+
+        const cloudTexture = createCloudTexture();
+        const movingClouds = [];
+
+        function addMovingCloud(x, y, z, width, height, speed, opacity) {
+            // Sprites always face the camera, which is useful for flat cloud billboards.
+            const cloud = new THREE.Sprite(
+                new THREE.SpriteMaterial({
+                    map: cloudTexture,
+                    transparent: true,
+                    opacity: opacity,
+                    depthWrite: false,
+                    fog: false
+                })
+            );
+
+            cloud.position.set(x, y, z);
+            cloud.scale.set(width, height, 1);
+            cloud.renderOrder = -2;
+            cloud.userData.speed = speed;
+            cloud.userData.baseOpacity = opacity;
+            cloud.userData.phase = Math.random() * Math.PI * 2;
+            scene.add(cloud);
+            movingClouds.push(cloud);
+        }
+
+        addMovingCloud(-125, 29, -82, 44, 12, 4.6, 0.33);
+        addMovingCloud(-132, 36, -34, 58, 14, 3.4, 0.26);
+        addMovingCloud(-118, 25, 30, 50, 12, 5.2, 0.3);
+        addMovingCloud(-138, 41, 78, 64, 16, 2.6, 0.22);
+        addMovingCloud(-128, 33, 118, 48, 11, 4.0, 0.28);
+
+        function updateSkyAnimation(delta, elapsed) {
+            // This updates star twinkle time and cloud positions when the scene is rendered.
+            starField.material.uniforms.uTime.value = elapsed;
+
+            for (let i = 0; i < movingClouds.length; i++) {
+                const cloud = movingClouds[i];
+                cloud.position.z += cloud.userData.speed * delta;
+
+                if (cloud.position.z > 135) {
+                    cloud.position.z = -120;
+                }
+
+                cloud.material.opacity = cloud.userData.baseOpacity +
+                    Math.sin(elapsed * 0.35 + cloud.userData.phase) * 0.035;
+            }
+        }
+
+        function createGroundTexture() {
+            // A generated grass/dirt texture breaks up the flat green ground plane.
+            const size = 1024;
+            const c = document.createElement("canvas");
+            c.width = size;
+            c.height = size;
+            const g = c.getContext("2d");
+
+            g.fillStyle = "#3f5846";
+            g.fillRect(0, 0, size, size);
+
+            for (let i = 0; i < 7200; i++) {
+                const x = Math.random() * size;
+                const y = Math.random() * size;
+                const green = 58 + Math.floor(Math.random() * 42);
+                const red = 42 + Math.floor(Math.random() * 24);
+                const blue = 40 + Math.floor(Math.random() * 18);
+                g.fillStyle = "rgba(" + red + "," + green + "," + blue + ",0.38)";
+                g.fillRect(x, y, 3 + Math.random() * 5, 1 + Math.random() * 4);
+            }
+
+            for (let i = 0; i < 32; i++) {
+                const x = Math.random() * size;
+                const y = Math.random() * size;
+                const radius = 30 + Math.random() * 85;
+                const patch = g.createRadialGradient(x, y, 0, x, y, radius);
+                patch.addColorStop(0, "rgba(25,38,28,0.28)");
+                patch.addColorStop(1, "rgba(25,38,28,0)");
+                g.fillStyle = patch;
+                g.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+            }
+
+            const tex = new THREE.CanvasTexture(c);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(14, 14);
+            tex.encoding = THREE.sRGBEncoding;
+            return tex;
+        }
+
+        // Ambient and hemisphere lights give soft daylight. The point light is still mouse-controlled.
+        const ambient = new THREE.AmbientLight(0xffffff, 0.72);
+        scene.add(ambient);
+
+        const pointLight = new THREE.PointLight(0xffffff, 0.95, 150);
+        scene.add(pointLight);
+
+        const fillLight = new THREE.HemisphereLight(0xcfefff, 0x88a070, 0.62);
+        scene.add(fillLight);
+
+        const lightMarker = new THREE.Mesh(
+            new THREE.SphereGeometry(0.16, 12, 12),
+            new THREE.MeshBasicMaterial({ color: 0xfff2cc })
+        );
+        lightMarker.visible = false;
+        scene.add(lightMarker);
+
+        // lightState stores the actual light position. target is where the mouse wants it to go.
+        const lightState = {
+            position: new THREE.Vector3(0, 5, 0),
+            target: new THREE.Vector3(0, 5, 0),
+            height: 5,
+            minHeight: 1.5,
+            maxHeight: 10
+        };
+
+        // Raycaster converts the 2D mouse position into a 3D point on the landing plane.
+        const lightControl = {
+            hasPointer: true,
+            clientX: window.innerWidth / 2,
+            clientY: window.innerHeight / 2,
+            pointer: new THREE.Vector2(),
+            raycaster: new THREE.Raycaster(),
+            landingPlane: new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+            heightPlane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -lightState.height),
+            hitPoint: new THREE.Vector3(),
+            maxX: 34,
+            maxZ: 34,
+            smoothing: 18
+        };
+
+        function updateLightPosition(delta) {
+            // Smoothly move the light toward the mouse target instead of jumping instantly.
+            const alpha = delta === undefined ? 1 : 1 - Math.exp(-lightControl.smoothing * delta);
+            lightState.position.lerp(lightState.target, alpha);
+            pointLight.position.copy(lightState.position);
+            lightMarker.position.copy(pointLight.position);
+        }
+
+        function setLightTargetFromPointer() {
+            if (!lightControl.hasPointer) {
+                return;
+            }
+
+            // Convert mouse pixels into normalized device coordinates: -1 to +1.
+            const rect = renderer.domElement.getBoundingClientRect();
+            const x = ((lightControl.clientX - rect.left) / rect.width) * 2 - 1;
+            const y = -((lightControl.clientY - rect.top) / rect.height) * 2 + 1;
+
+            lightControl.pointer.set(
+                THREE.MathUtils.clamp(x, -1, 1),
+                THREE.MathUtils.clamp(y, -1, 1)
+            );
+            lightControl.raycaster.setFromCamera(lightControl.pointer, camera);
+
+            // Intersect the mouse ray with the landing plane, then place the light above that hit point.
+            const ray = lightControl.raycaster.ray;
+            let hit = ray.intersectPlane(lightControl.landingPlane, lightControl.hitPoint);
+
+            if (!hit) {
+                lightControl.heightPlane.constant = -lightState.height;
+                hit = ray.intersectPlane(lightControl.heightPlane, lightControl.hitPoint);
+            }
+
+            if (hit) {
+                lightState.target.set(
+                    THREE.MathUtils.clamp(lightControl.hitPoint.x, -lightControl.maxX, lightControl.maxX),
+                    lightState.height,
+                    THREE.MathUtils.clamp(lightControl.hitPoint.z, -lightControl.maxZ, lightControl.maxZ)
+                );
+            }
+        }
+
+        setLightTargetFromPointer();
+        updateLightPosition();
+
+        function createHelipadTexture() {
+            // The helipad texture is generated with canvas: concrete noise, safety rings, and a large H.
+            const size = 1024;
+            const c = document.createElement("canvas");
+            c.width = size;
+            c.height = size;
+            const g = c.getContext("2d");
+
+            g.fillStyle = "#343a3d";
+            g.fillRect(0, 0, size, size);
+
+            // Small random pixels make the flat concrete surface look less artificial.
+            for (let i = 0; i < 4200; i++) {
+                const x = Math.random() * size;
+                const y = Math.random() * size;
+                const shade = 42 + Math.floor(Math.random() * 44);
+                g.fillStyle = "rgb(" + shade + "," + shade + "," + shade + ")";
+                g.fillRect(x, y, 2, 2);
+            }
+
+            g.strokeStyle = "#f4f0d2";
+            g.lineWidth = 34;
+            g.beginPath();
+            g.arc(size / 2, size / 2, size * 0.38, 0, Math.PI * 2);
+            g.stroke();
+
+            // The white/yellow circles and big H make the surface read as a helipad.
+            g.strokeStyle = "#d7b847";
+            g.lineWidth = 18;
+            g.beginPath();
+            g.arc(size / 2, size / 2, size * 0.46, 0, Math.PI * 2);
+            g.stroke();
+
+            g.fillStyle = "#f4f0d2";
+            g.fillRect(size * 0.31, size * 0.28, size * 0.1, size * 0.44);
+            g.fillRect(size * 0.59, size * 0.28, size * 0.1, size * 0.44);
+            g.fillRect(size * 0.36, size * 0.45, size * 0.28, size * 0.1);
+
+            g.strokeStyle = "rgba(255,255,255,0.12)";
+            g.lineWidth = 4;
+            // Faint grid lines suggest concrete slabs without needing another image.
+            for (let i = 0; i < 9; i++) {
+                const pos = (i + 1) * (size / 10);
+                g.beginPath();
+                g.moveTo(pos, 0);
+                g.lineTo(pos, size);
+                g.stroke();
+                g.beginPath();
+                g.moveTo(0, pos);
+                g.lineTo(size, pos);
+                g.stroke();
+            }
+
+            const tex = new THREE.CanvasTexture(c);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(1, 1);
+            tex.encoding = THREE.sRGBEncoding;
+            return tex;
+        }
+
+        function createAccessRoadTexture() {
+            // A simple asphalt texture for the service road between terminal and helipad.
+            const size = 512;
+            const c = document.createElement("canvas");
+            c.width = size;
+            c.height = size;
+            const g = c.getContext("2d");
+
+            g.fillStyle = "#353a3f";
+            g.fillRect(0, 0, size, size);
+
+            for (let i = 0; i < 1600; i++) {
+                const shade = 44 + Math.floor(Math.random() * 36);
+                g.fillStyle = "rgba(" + shade + "," + shade + "," + shade + ",0.5)";
+                g.fillRect(Math.random() * size, Math.random() * size, 2, 2);
+            }
+
+            g.strokeStyle = "#d5c06a";
+            g.lineWidth = 10;
+            g.setLineDash([42, 30]);
+            g.beginPath();
+            g.moveTo(size / 2, 0);
+            g.lineTo(size / 2, size);
+            g.stroke();
+            g.setLineDash([]);
+
+            const tex = new THREE.CanvasTexture(c);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(1, 5);
+            tex.encoding = THREE.sRGBEncoding;
+            return tex;
+        }
+
+        const helipadTexture = createHelipadTexture();
+        const accessRoadTexture = createAccessRoadTexture();
+
+        // Reuse the shader scripts from the page so the helipad receives custom lighting.
+        const commonVertex = document.getElementById("litVertex").textContent;
+        const commonFragment = document.getElementById("litFragment").textContent;
+
+        // ShaderMaterial receives the helipad texture, the light position, and the camera position.
+        const helipadMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                uTexture: { value: helipadTexture },
+                uLightPos: { value: pointLight.position },
+                uLightColor: { value: new THREE.Color(0.95, 0.93, 0.85) },
+                uAmbientColor: { value: new THREE.Color(0.24, 0.24, 0.24) },
+                uTint: { value: new THREE.Color(0.82, 0.82, 0.82) },
+                uViewPos: { value: camera.position.clone() },
+                uUvScale: { value: new THREE.Vector2(1, 1) },
+                uUvOffset: { value: new THREE.Vector2(0, 0) }
+            },
+            vertexShader: commonVertex,
+            fragmentShader: commonFragment,
+            side: THREE.DoubleSide
+        });
+
+        const accessRoadMaterial = new THREE.MeshPhongMaterial({
+            map: accessRoadTexture,
+            color: 0xd8d8d8,
+            shininess: 8
+        });
+
+        const buildingBodyGeometry = new THREE.BoxGeometry(1, 1, 1);
+        const buildingRoofGeometry = new THREE.BoxGeometry(1, 1, 1);
+        const windowGeometry = new THREE.BoxGeometry(0.06, 0.32, 0.42);
+        const trunkGeometry = new THREE.CylinderGeometry(0.12, 0.16, 1.2, 10);
+        const treeTopGeometry = new THREE.ConeGeometry(0.72, 1.6, 12);
+        const buildingMaterials = [
+            new THREE.MeshPhongMaterial({ color: 0x4d5968, shininess: 20 }),
+            new THREE.MeshPhongMaterial({ color: 0x665f58, shininess: 18 }),
+            new THREE.MeshPhongMaterial({ color: 0x596b61, shininess: 18 }),
+            new THREE.MeshPhongMaterial({ color: 0x6d5962, shininess: 16 })
+        ];
+        const buildingRoofMaterial = new THREE.MeshPhongMaterial({ color: 0x22262d, shininess: 35 });
+        const windowMaterial = new THREE.MeshBasicMaterial({ color: 0xb8d7ff });
+        const warmWindowMaterial = new THREE.MeshBasicMaterial({ color: 0xffd58a });
+        const doorMaterial = new THREE.MeshPhongMaterial({ color: 0x1f2529, shininess: 25 });
+        const trunkMaterial = new THREE.MeshPhongMaterial({ color: 0x5b3520, shininess: 8 });
+        const leafMaterials = [
+            new THREE.MeshPhongMaterial({ color: 0x1f6f3a, shininess: 10 }),
+            new THREE.MeshPhongMaterial({ color: 0x2d813f, shininess: 10 }),
+            new THREE.MeshPhongMaterial({ color: 0x3b6d2d, shininess: 8 })
+        ];
+
+        function createBuilding(localX, localZ, width, height, depth, materialIndex, rows, columns) {
+            // A building is a small group: body, roof, and window meshes.
+            const group = new THREE.Group();
+            group.position.set(localX, 0, localZ);
+
+            const body = new THREE.Mesh(buildingBodyGeometry, buildingMaterials[materialIndex % buildingMaterials.length]);
+            body.scale.set(width, height, depth);
+            body.position.y = height / 2;
+            group.add(body);
+
+            const roof = new THREE.Mesh(buildingRoofGeometry, buildingRoofMaterial);
+            roof.scale.set(width * 1.08, 0.22, depth * 1.08);
+            roof.position.y = height + 0.11;
+            group.add(roof);
+
+            // Windows are placed only on the face looking toward the helipad.
+            const side = localX > 0 ? 1 : -1;
+            const faceX = -side * (width / 2 + 0.04);
+            for (let row = 0; row < rows; row++) {
+                const y = 1 + row * ((height - 1.6) / Math.max(rows - 1, 1));
+                for (let col = 0; col < columns; col++) {
+                    const z = -depth / 2 + 0.75 + col * ((depth - 1.5) / Math.max(columns - 1, 1));
+                    const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
+                    windowMesh.position.set(faceX, y, z);
+                    group.add(windowMesh);
+                }
+            }
+
+            return group;
+        }
+
+        function createHelipadTerminal() {
+            // One larger building makes the helipad feel like a real rooftop/airfield facility.
+            const group = new THREE.Group();
+            group.position.set(8, 0, -34);
+
+            const body = new THREE.Mesh(
+                new THREE.BoxGeometry(18, 8, 7),
+                new THREE.MeshPhongMaterial({ color: 0x566370, shininess: 28 })
+            );
+            body.position.y = 4;
+            group.add(body);
+
+            const sideWing = new THREE.Mesh(
+                new THREE.BoxGeometry(10, 4.5, 6),
+                new THREE.MeshPhongMaterial({ color: 0x44515c, shininess: 24 })
+            );
+            sideWing.position.set(-14, 2.25, 0.6);
+            group.add(sideWing);
+
+            const roof = new THREE.Mesh(
+                new THREE.BoxGeometry(20, 0.35, 8.4),
+                buildingRoofMaterial
+            );
+            roof.position.y = 8.25;
+            group.add(roof);
+
+            const tower = new THREE.Mesh(
+                new THREE.BoxGeometry(5.6, 5.4, 5.6),
+                new THREE.MeshPhongMaterial({ color: 0x677583, shininess: 30 })
+            );
+            tower.position.set(7.2, 10.75, -0.4);
+            group.add(tower);
+
+            const towerGlass = new THREE.Mesh(
+                new THREE.BoxGeometry(5.8, 1.2, 5.8),
+                new THREE.MeshBasicMaterial({ color: 0xbadfff })
+            );
+            towerGlass.position.set(7.2, 12.6, -0.4);
+            group.add(towerGlass);
+
+            const antenna = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.06, 0.06, 3, 8),
+                new THREE.MeshBasicMaterial({ color: 0xd8e4ef })
+            );
+            antenna.position.set(7.2, 15.15, -0.4);
+            group.add(antenna);
+
+            const beacon = new THREE.Mesh(
+                new THREE.SphereGeometry(0.22, 12, 8),
+                new THREE.MeshBasicMaterial({ color: 0xff3b3b })
+            );
+            beacon.position.set(7.2, 16.8, -0.4);
+            group.add(beacon);
+
+            const beaconLight = new THREE.PointLight(0xff3b3b, 0.7, 22);
+            beaconLight.position.copy(beacon.position);
+            group.add(beaconLight);
+
+            const frontZ = 3.57;
+            for (let row = 0; row < 3; row++) {
+                for (let col = 0; col < 8; col++) {
+                    const lit = (row + col) % 3 !== 0;
+                    const windowMesh = new THREE.Mesh(
+                        new THREE.BoxGeometry(0.95, 0.55, 0.08),
+                        lit ? warmWindowMaterial : windowMaterial
+                    );
+                    windowMesh.position.set(-7.2 + col * 2.05, 2.2 + row * 1.8, frontZ);
+                    group.add(windowMesh);
+                }
+            }
+
+            const door = new THREE.Mesh(new THREE.BoxGeometry(1.8, 2.5, 0.12), doorMaterial);
+            door.position.set(-7.4, 1.25, frontZ + 0.04);
+            group.add(door);
+
+            return group;
+        }
+
+        function createTree(localX, localZ, scale, materialIndex) {
+            // A tree is built from simple primitives so no extra model file is needed.
+            const group = new THREE.Group();
+            group.position.set(localX, 0, localZ);
+            group.scale.setScalar(scale);
+
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.y = 0.6;
+            group.add(trunk);
+
+            const treeTop = new THREE.Mesh(treeTopGeometry, leafMaterials[materialIndex % leafMaterials.length]);
+            treeTop.position.y = 1.65;
+            group.add(treeTop);
+
+            return group;
+        }
+
+        function createHelipadScenery() {
+            // Buildings and trees sit around the helipad perimeter.
+            const group = new THREE.Group();
+            group.add(createHelipadTerminal());
+
+            for (let i = 0; i < 14; i++) {
+                // Trees fill the middle distance between the pad and buildings.
+                const angle = (i / 14) * Math.PI * 2 + 0.16;
+                const radius = 23 + (i % 3) * 3.5;
+                let x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+
+                // Keep trees clear of the access road, which runs along x=0 toward the terminal.
+                if (z < -6 && Math.abs(x) < 6) {
+                    x = (x >= 0 ? 1 : -1) * 8;
+                }
+
+                group.add(createTree(x, z, 0.85 + (i % 4) * 0.08, i));
+            }
+
+            return group;
+        }
+
+        const helipad = new THREE.Mesh(new THREE.CircleGeometry(10, 96), helipadMaterial);
+        helipad.rotation.x = -Math.PI / 2;
+        helipad.position.y = -0.015;
+        scene.add(helipad);
+
+        function createAccessRoad() {
+            // The road connects the terminal entrance to the helipad edge.
+            const group = new THREE.Group();
+
+            const road = new THREE.Mesh(new THREE.PlaneGeometry(5.4, 25, 1, 1), accessRoadMaterial);
+            road.rotation.x = -Math.PI / 2;
+            road.position.set(0, -0.008, -24.6);
+            group.add(road);
+
+            const apron = new THREE.Mesh(
+                new THREE.PlaneGeometry(9, 4, 1, 1),
+                new THREE.MeshPhongMaterial({ color: 0x42474c, shininess: 10 })
+            );
+            apron.rotation.x = -Math.PI / 2;
+            apron.position.set(0, -0.006, -11.4);
+            group.add(apron);
+
+            const walkway = new THREE.Mesh(
+                new THREE.PlaneGeometry(2.2, 12, 1, 1),
+                new THREE.MeshPhongMaterial({ color: 0x727a7f, shininess: 6 })
+            );
+            walkway.rotation.x = -Math.PI / 2;
+            walkway.position.set(-7.4, 0.004, -27.3);
+            group.add(walkway);
+
+            const curbMaterial = new THREE.MeshPhongMaterial({ color: 0xd8d0a0, shininess: 5 });
+            for (let i = 0; i < 2; i++) {
+                const side = i === 0 ? -1 : 1;
+                const curb = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.1, 22), curbMaterial);
+                curb.position.set(side * 2.85, 0.05, -24.6);
+                group.add(curb);
+            }
+
+            return group;
+        }
+
+        scene.add(createAccessRoad());
+
+        const helipadLights = [];
+
+        function createHelipadLights() {
+            // Small lamps around the pad create a realistic night landing boundary.
+            const group = new THREE.Group();
+            const lampGeometry = new THREE.SphereGeometry(0.16, 12, 8);
+            const colors = [0xffffff, 0xff4040, 0x44ff66, 0xffffff];
+
+            for (let i = 0; i < 24; i++) {
+                const angle = (i / 24) * Math.PI * 2;
+                const x = Math.cos(angle) * 9.4;
+                const z = Math.sin(angle) * 9.4;
+                const color = colors[i % colors.length];
+                const lamp = new THREE.Mesh(
+                    lampGeometry,
+                    new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.85 })
+                );
+                lamp.position.set(x, 0.12, z);
+                group.add(lamp);
+                helipadLights.push(lamp);
+
+                if (i % 3 === 0) {
+                    const lampLight = new THREE.PointLight(color, 0.32, 8);
+                    lampLight.position.set(x, 0.8, z);
+                    group.add(lampLight);
+                }
+            }
+
+            return group;
+        }
+
+        scene.add(createHelipadLights());
+
+        const helipadScenery = createHelipadScenery();
+        scene.add(helipadScenery);
+
+        const importedHelicopterGroup = new THREE.Group();
+        // Moving this group moves the whole imported helicopter after it loads.
+        importedHelicopterGroup.visible = false;
+        scene.add(importedHelicopterGroup);
+
+        // Rotor state is separate from the main render state so rotation starts only on key 0.
+        const helicopterRotors = [];
+        const rotorBlurDisks = [];
+        let rotorShouldRotate = false;
+        let rotorAnimationId = null;
+        let lastRotorTime = 0;
+        function createRotorBlurDisks() {
+            // Transparent disks sell the illusion of fast-spinning rotors.
+            const mainMaterial = new THREE.MeshBasicMaterial({
+                color: 0xd9e8f2,
+                transparent: true,
+                opacity: 0.0,
+                depthWrite: false,
+                side: THREE.DoubleSide
+            });
+            const mainDisk = new THREE.Mesh(new THREE.CircleGeometry(1, 96), mainMaterial);
+            mainDisk.rotation.x = -Math.PI / 2;
+            mainDisk.visible = false;
+            importedHelicopterGroup.add(mainDisk);
+            rotorBlurDisks.push(mainDisk);
+
+            const tailMaterial = mainMaterial.clone();
+            const tailDisk = new THREE.Mesh(new THREE.CircleGeometry(1, 64), tailMaterial);
+            tailDisk.rotation.y = Math.PI / 2;
+            tailDisk.visible = false;
+            importedHelicopterGroup.add(tailDisk);
+            rotorBlurDisks.push(tailDisk);
+        }
+
+        createRotorBlurDisks();
+
+        function alignHelicopterEffects(helicopterRoot) {
+            // Position lights and blur disks from the loaded model bounds so they sit on the mesh.
+            helicopterRoot.updateMatrixWorld(true);
+            const bounds = new THREE.Box3().setFromObject(helicopterRoot);
+            const size = new THREE.Vector3();
+            const center = new THREE.Vector3();
+            bounds.getSize(size);
+            bounds.getCenter(center);
+
+            if (rotorBlurDisks.length >= 2) {
+                const mainRotor = helicopterRotors.find(function (rotor) {
+                    return rotor.type === "main";
+                });
+                const tailRotor = helicopterRotors.find(function (rotor) {
+                    return rotor.type === "tail";
+                });
+
+                if (mainRotor) {
+                    const mainBounds = new THREE.Box3().setFromObject(mainRotor.object);
+                    const mainSize = new THREE.Vector3();
+                    const mainCenter = new THREE.Vector3();
+                    const mainParentScale = new THREE.Vector3();
+                    mainBounds.getSize(mainSize);
+                    mainBounds.getCenter(mainCenter);
+                    mainRotor.object.parent.getWorldScale(mainParentScale);
+                    const mainRadius = Math.max(mainSize.x, mainSize.z) * 0.52;
+                    mainRotor.object.parent.add(rotorBlurDisks[0]);
+                    rotorBlurDisks[0].position.copy(mainRotor.object.position);
+                    rotorBlurDisks[0].position.y += 0.03 / mainParentScale.y;
+                    rotorBlurDisks[0].scale.setScalar(mainRadius / mainParentScale.x);
+                }
+
+                if (tailRotor) {
+                    const tailBounds = new THREE.Box3().setFromObject(tailRotor.object);
+                    const tailSize = new THREE.Vector3();
+                    const tailCenter = new THREE.Vector3();
+                    const tailParentScale = new THREE.Vector3();
+                    tailBounds.getSize(tailSize);
+                    tailBounds.getCenter(tailCenter);
+                    tailRotor.object.parent.getWorldScale(tailParentScale);
+                    const tailRadius = Math.max(tailSize.y, tailSize.z, tailSize.x) * 0.5;
+                    tailRotor.object.parent.add(rotorBlurDisks[1]);
+                    rotorBlurDisks[1].position.copy(tailRotor.object.position);
+                    rotorBlurDisks[1].scale.setScalar(tailRadius / tailParentScale.x);
+                }
+            }
+        }
+
+        function fitImportedHelicopterToHelipad(helicopterRoot) {
+            // Measure the imported model, scale it to helipad size, and move it into the landing spot.
+            const bounds = new THREE.Box3().setFromObject(helicopterRoot);
+            const size = new THREE.Vector3();
+            bounds.getSize(size);
+
+            const targetLength = 8;
+            const longestSide = Math.max(size.x, size.z);
+            // Scale by the largest horizontal dimension so the helicopter fits the pad.
+            const scale = longestSide > 0 ? targetLength / longestSide : 1;
+            helicopterRoot.scale.setScalar(scale);
+
+            bounds.setFromObject(helicopterRoot);
+            const center = new THREE.Vector3();
+            bounds.getCenter(center);
+
+            // Center the model and put the landing gear slightly above the helipad.
+            helicopterRoot.position.set(-center.x, -bounds.min.y + 0.12, -center.z);
+            helicopterRoot.rotation.y = Math.PI;
+        }
+
+        function prepareImportedHelicopterMaterials(helicopterRoot) {
+            // Traverse visits every child mesh inside the imported GLB model.
+            helicopterRoot.traverse(function (child) {
+                if (!child.isMesh) {
+                    return;
+                }
+
+                child.frustumCulled = false;
+                if (child.material) {
+                    const materials = Array.isArray(child.material) ? child.material : [child.material];
+
+                    for (let i = 0; i < materials.length; i++) {
+                        const material = materials[i];
+                        const materialName = material.name ? material.name.toLowerCase() : "";
+
+                        if (materialName.indexOf("glass") !== -1) {
+                            material.transparent = true;
+                            material.opacity = 0.48;
+                            material.depthWrite = false;
+                            material.side = THREE.DoubleSide;
+                        }
+
+                        material.needsUpdate = true;
+                    }
+                }
+            });
+        }
+
+        function collectHelicopterRotors(helicopterRoot) {
+            // The GLB contains named rotor groups; those groups are the parts we rotate.
+            helicopterRotors.length = 0;
+
+            helicopterRoot.traverse(function (child) {
+                if (child.isMesh) {
+                    return;
+                }
+
+                const objectName = child.name ? child.name.toLowerCase() : "";
+
+                if (objectName.indexOf("propellar") !== -1) {
+                    helicopterRotors.push({ object: child, axis: "y", speed: 18, type: "main" });
+                } else if (objectName.indexOf("backrotor") !== -1) {
+                    helicopterRotors.push({ object: child, axis: "x", speed: 28, type: "tail" });
+                }
+            });
+        }
+
+        function rotateHelicopterRotors(time) {
+            // requestAnimationFrame gives the current time, so rotor speed stays stable.
+            if (lastRotorTime === 0) {
+                lastRotorTime = time;
+            }
+
+            const delta = Math.min((time - lastRotorTime) / 1000, 0.05);
+            lastRotorTime = time;
+
+            for (let i = 0; i < helicopterRotors.length; i++) {
+                // Main and tail rotors rotate around different local axes.
+                const rotor = helicopterRotors[i];
+                rotor.object.rotation[rotor.axis] += rotor.speed * delta;
+            }
+
+            for (let i = 0; i < rotorBlurDisks.length; i++) {
+                rotorBlurDisks[i].rotation.z += (i === 0 ? 12 : 18) * delta;
+            }
+
+            renderScene();
+            rotorAnimationId = requestAnimationFrame(rotateHelicopterRotors);
+        }
+
+        function updateRealismEffects(elapsed) {
+            for (let i = 0; i < helipadLights.length; i++) {
+                helipadLights[i].material.opacity = 0.72 + Math.sin(elapsed * 1.7 + i) * 0.12;
+            }
+        }
+
+        function startHelicopterWingRotation() {
+            // Remember the user's request even if they press 0 before the GLB finishes loading.
+            rotorShouldRotate = true;
+
+            // Avoid stacking multiple animation loops on repeated 0 presses.
+            if (rotorAnimationId !== null || helicopterRotors.length === 0) {
+                return;
+            }
+
+            for (let i = 0; i < rotorBlurDisks.length; i++) {
+                rotorBlurDisks[i].visible = true;
+                rotorBlurDisks[i].material.opacity = i === 0 ? 0.16 : 0.12;
+            }
+
+            lastRotorTime = 0;
+            rotorAnimationId = requestAnimationFrame(rotateHelicopterRotors);
+        }
+
+        function stopHelicopterWingRotation() {
+            // Key 9 cancels the rotor-only animation loop.
+            rotorShouldRotate = false;
+
+            if (rotorAnimationId !== null) {
+                cancelAnimationFrame(rotorAnimationId);
+                rotorAnimationId = null;
+            }
+
+            for (let i = 0; i < rotorBlurDisks.length; i++) {
+                rotorBlurDisks[i].visible = false;
+                rotorBlurDisks[i].material.opacity = 0;
+            }
+
+            lastRotorTime = 0;
+            renderScene();
+        }
+
+        if (THREE.GLTFLoader) {
+            // GLTFLoader loads the .glb helicopter file from assets/models.
+            const helicopterLoader = new THREE.GLTFLoader();
+
+            if (THREE.DRACOLoader) {
+                // The helicopter GLB uses Draco compression, so the loader needs the decoder path.
+                const dracoLoader = new THREE.DRACOLoader();
+                dracoLoader.setDecoderPath("js/libs/draco/gltf/");
+                helicopterLoader.setDRACOLoader(dracoLoader);
+            }
+
+            helicopterLoader.load(
+                "assets/models/ingenuity-mars-helicopter.glb",
+                function (gltf) {
+                    // gltf.scene is the actual 3D model hierarchy loaded from the helicopter GLB.
+                    const importedHelicopter = gltf.scene;
+                    importedHelicopter.name = "NASA Ingenuity Mars Helicopter";
+                    prepareImportedHelicopterMaterials(importedHelicopter);
+                    fitImportedHelicopterToHelipad(importedHelicopter);
+                    collectHelicopterRotors(importedHelicopter);
+
+                    importedHelicopterGroup.add(importedHelicopter);
+                    importedHelicopterGroup.visible = true;
+                    alignHelicopterEffects(importedHelicopter);
+                    if (rotorShouldRotate) {
+                        startHelicopterWingRotation();
+                    }
+                    renderScene();
+                },
+                undefined,
+                function (error) {
+                    console.warn("Could not load the imported helicopter model.", error);
+                }
+            );
+        }
+
+        const ground = new THREE.Mesh(
+            // A large dark-green ground plane surrounds the helipad and scenery.
+            new THREE.PlaneGeometry(260, 260, 1, 1),
+            new THREE.MeshPhongMaterial({ map: createGroundTexture(), color: 0x9fb49a, shininess: 0 })
+        );
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = -0.05;
+        scene.add(ground);
+
+        // keyState remembers which camera and helicopter-control keys are currently pressed.
+        const keyState = {};
+        const controlKeys = new Set([
+            "arrowleft",
+            "arrowright",
+            "arrowup",
+            "arrowdown",
+            "a",
+            "d",
+            "w",
+            "s",
+            "q",
+            "e",
+            "o",
+            "p",
+            "0",
+            "9"
+        ]);
+
+        document.addEventListener("keydown", function (e) {
+            const key = e.key.toLowerCase();
+            keyState[key] = true;
+            if (controlKeys.has(key)) {
+                // Prevent browser scrolling/zooming behavior while using project controls.
+                e.preventDefault();
+                if (key === "0") {
+                    startHelicopterWingRotation();
+                    return;
+                }
+                if (key === "9") {
+                    stopHelicopterWingRotation();
+                    return;
+                }
+                renderScene(1 / 30);
+            }
+        });
+
+        document.addEventListener("keyup", function (e) {
+            keyState[e.key.toLowerCase()] = false;
+        });
+
+        renderer.domElement.addEventListener("pointermove", function (e) {
+            // Mouse movement controls the point light position on the helipad.
+            lightControl.hasPointer = true;
+            lightControl.clientX = e.clientX;
+            lightControl.clientY = e.clientY;
+            setLightTargetFromPointer();
+            renderScene();
+        });
+
+        renderer.domElement.addEventListener("wheel", function (e) {
+            // Mouse wheel changes the light height.
+            e.preventDefault();
+            lightState.height = THREE.MathUtils.clamp(
+                lightState.height - e.deltaY * 0.005,
+                lightState.minHeight,
+                lightState.maxHeight
+            );
+            setLightTargetFromPointer();
+            renderScene();
+        }, { passive: false });
+
+        function handleKeyboard(delta) {
+            // Camera controls and helicopter movement share one key state table.
+            const orbitSpeed = 1.6;
+            const zoomSpeed = 7;
+            const heightSpeed = 6;
+            const horizontalSpeed = 8;
+            const forwardSpeed = 8;
+            const liftSpeed = 5;
+
+            if (keyState["a"]) {
+                cameraOrbit.angle += orbitSpeed * delta;
+            }
+            if (keyState["d"]) {
+                cameraOrbit.angle -= orbitSpeed * delta;
+            }
+            if (keyState["q"]) {
+                cameraOrbit.radius += zoomSpeed * delta;
+            }
+            if (keyState["e"]) {
+                cameraOrbit.radius -= zoomSpeed * delta;
+            }
+            if (keyState["w"]) {
+                cameraOrbit.height += heightSpeed * delta;
+            }
+            if (keyState["s"]) {
+                cameraOrbit.height -= heightSpeed * delta;
+            }
+
+            cameraOrbit.radius = THREE.MathUtils.clamp(cameraOrbit.radius, 6, 32);
+            cameraOrbit.height = THREE.MathUtils.clamp(cameraOrbit.height, 1.8, 14);
+
+            // Arrow keys move the helicopter across the pad; O/P change altitude.
+            if (keyState["arrowleft"]) {
+                importedHelicopterGroup.position.x -= horizontalSpeed * delta;
+            }
+            if (keyState["arrowright"]) {
+                importedHelicopterGroup.position.x += horizontalSpeed * delta;
+            }
+            if (keyState["arrowup"]) {
+                importedHelicopterGroup.position.z -= forwardSpeed * delta;
+            }
+            if (keyState["arrowdown"]) {
+                importedHelicopterGroup.position.z += forwardSpeed * delta;
+            }
+            if (keyState["o"]) {
+                importedHelicopterGroup.position.y += liftSpeed * delta;
+            }
+            if (keyState["p"]) {
+                importedHelicopterGroup.position.y -= liftSpeed * delta;
+            }
+
+            importedHelicopterGroup.position.x = THREE.MathUtils.clamp(importedHelicopterGroup.position.x, -11, 11);
+            importedHelicopterGroup.position.z = THREE.MathUtils.clamp(importedHelicopterGroup.position.z, -11, 11);
+            // Y cannot go below ground level, and the upper limit keeps it in camera view.
+            importedHelicopterGroup.position.y = THREE.MathUtils.clamp(importedHelicopterGroup.position.y, 0, 12);
+        }
+
+        function renderScene(delta) {
+            // Render on changes; the rotor animation calls this after the user starts it with 0.
+            delta = delta || 0;
+            handleKeyboard(delta);
+            updateCamera();
+            setLightTargetFromPointer();
+            updateLightPosition();
+            updateSkyAnimation(0, performance.now() * 0.001);
+            updateRealismEffects(performance.now() * 0.001);
+
+            helipadMaterial.uniforms.uViewPos.value.copy(camera.position);
+            renderer.render(scene, camera);
+        }
+
+        renderScene();
+
+        window.addEventListener("resize", function () {
+            // Keep the camera and renderer matched to the browser window size.
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            starField.material.uniforms.uPixelRatio.value = renderer.getPixelRatio();
+            renderScene();
+        });
+    </script>
+</body>
+
+</html>
