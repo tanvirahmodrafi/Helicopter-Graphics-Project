@@ -151,7 +151,7 @@
         scene.background = new THREE.Color(0xf0a868);
         // Fog fades distant objects to the horizon color so the world doesn't look cut off.
         // Parameters: (color, nearDistance where fog starts, farDistance where fog is full).
-        scene.fog = new THREE.Fog(0xe89b6b, 120, 260);
+        scene.fog = new THREE.Fog(0xe89b6b, 55, 180);
 
         // antialias smooths jagged edges; outputEncoding ensures colors look correct on screen.
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -1608,7 +1608,8 @@
             if (keyState["arrowdown"]) {
                 importedHelicopterGroup.position.z += forwardSpeed * delta;
             }
-            if (keyState["o"]) {
+            // The helicopter can only gain altitude while its rotors are spinning.
+            if (keyState["o"] && rotorShouldRotate) {
                 importedHelicopterGroup.position.y += liftSpeed * delta;
             }
             if (keyState["p"]) {
