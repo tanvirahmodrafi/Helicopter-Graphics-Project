@@ -147,11 +147,11 @@
         //   - Camera: defines the viewpoint from which the scene is drawn.
 
         const scene = new THREE.Scene();
-        // Light blue background simulates a daytime sky behind the dome.
-        scene.background = new THREE.Color(0x9fcff2);
+        // Warm peach background simulates a sunset sky behind the dome.
+        scene.background = new THREE.Color(0xf0a868);
         // Fog fades distant objects to the horizon color so the world doesn't look cut off.
         // Parameters: (color, nearDistance where fog starts, farDistance where fog is full).
-        scene.fog = new THREE.Fog(0xbfdcf0, 120, 260);
+        scene.fog = new THREE.Fog(0xe89b6b, 120, 260);
 
         // antialias smooths jagged edges; outputEncoding ensures colors look correct on screen.
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -203,18 +203,18 @@
 
             // Main sky gradient: top -> bottom (zenith to horizon).
             const skyGradient = g.createLinearGradient(0, 0, 0, height);
-            skyGradient.addColorStop(0, "#7fc4f4");      // deep blue at the top
-            skyGradient.addColorStop(0.42, "#a9d8f6");   // mid sky
-            skyGradient.addColorStop(0.72, "#d7ecfb");   // pale blue near horizon
-            skyGradient.addColorStop(1, "#f4fbff");      // nearly white at the horizon
+            skyGradient.addColorStop(0, "#3b2a5c");      // deep dusk purple at the top
+            skyGradient.addColorStop(0.42, "#c46a5e");   // mid sky rose
+            skyGradient.addColorStop(0.72, "#f0a868");   // warm orange near horizon
+            skyGradient.addColorStop(1, "#f7d49a");      // golden cream at the horizon
             g.fillStyle = skyGradient;
             g.fillRect(0, 0, width, height);
 
-            // Soft white glow layered near the horizon for atmospheric depth.
+            // Soft warm glow layered near the horizon for sunset atmospheric depth.
             const horizonGlow = g.createLinearGradient(0, height * 0.52, 0, height);
-            horizonGlow.addColorStop(0, "rgba(255,255,255,0)");
-            horizonGlow.addColorStop(0.62, "rgba(255,255,255,0.24)");
-            horizonGlow.addColorStop(1, "rgba(255,255,255,0.42)");
+            horizonGlow.addColorStop(0, "rgba(255,200,140,0)");
+            horizonGlow.addColorStop(0.62, "rgba(255,200,140,0.28)");
+            horizonGlow.addColorStop(1, "rgba(255,210,150,0.48)");
             g.fillStyle = horizonGlow;
             g.fillRect(0, 0, width, height);
 
@@ -227,8 +227,8 @@
             return tex;
         }
 
-        function createMoonGlowTexture() {
-            // The moon glow is a single soft radial gradient on a transparent canvas.
+        function createSunGlowTexture() {
+            // The sun glow is a single soft radial gradient on a transparent canvas.
             // It's applied to a Sprite, so it always faces the camera.
             const size = 256;
             const c = document.createElement("canvas");
@@ -274,9 +274,9 @@
             for (let i = 0; i < puffs.length; i++) {
                 const puff = puffs[i];
                 const gradient = g.createRadialGradient(puff[0], puff[1], 8, puff[0], puff[1], puff[2]);
-                gradient.addColorStop(0, "rgba(235,243,255,0.46)");
-                gradient.addColorStop(0.52, "rgba(190,210,226,0.25)");
-                gradient.addColorStop(1, "rgba(190,210,226,0)");
+                gradient.addColorStop(0, "rgba(255,210,180,0.52)");
+                gradient.addColorStop(0.52, "rgba(210,140,130,0.28)");
+                gradient.addColorStop(1, "rgba(120,80,110,0)");
                 g.fillStyle = gradient;
                 g.beginPath();
                 g.ellipse(puff[0], puff[1], puff[2], puff[3], 0, 0, Math.PI * 2);
@@ -444,7 +444,7 @@
         // Soft halo around the moon, drawn as a Sprite so it always faces the camera.
         const moonGlow = new THREE.Sprite(
             new THREE.SpriteMaterial({
-                map: createMoonGlowTexture(),
+                map: createSunGlowTexture(),
                 transparent: true,
                 depthWrite: false,
                 opacity: 0.9,
@@ -458,9 +458,9 @@
         moonGlow.visible = false;
         scene.add(moonGlow);
 
-        // Directional light = parallel rays, like the sun. Used as the primary daylight source.
-        const sunLight = new THREE.DirectionalLight(0xfff1c8, 0.85);
-        sunLight.position.set(-80, 90, 45);
+        // Directional light = parallel rays, like the sun. Warm orange tone for a low sunset sun.
+        const sunLight = new THREE.DirectionalLight(0xffa860, 0.95);
+        sunLight.position.set(-80, 28, 45);
         scene.add(sunLight);
 
         // Star field built above; hidden by default (daytime).
@@ -575,19 +575,19 @@
         }
 
         // --- Lighting rig ---
-        // Three light types are used together for a natural daytime look:
+        // Three light types are used together for a warm sunset look:
         //   - AmbientLight   : uniform color added to every surface (no direction).
         //   - PointLight     : the mouse-controlled light that creates the helipad highlight.
         //   - HemisphereLight: gradient between sky color and ground color for soft fill.
 
-        const ambient = new THREE.AmbientLight(0xffffff, 0.72);
+        const ambient = new THREE.AmbientLight(0xffd0a0, 0.6);
         scene.add(ambient);
 
         // Range of 150 units; bright but localized so dragging the mouse feels impactful.
-        const pointLight = new THREE.PointLight(0xffffff, 0.95, 150);
+        const pointLight = new THREE.PointLight(0xffe2b8, 0.95, 150);
         scene.add(pointLight);
 
-        const fillLight = new THREE.HemisphereLight(0xcfefff, 0x88a070, 0.62);
+        const fillLight = new THREE.HemisphereLight(0xff9a6a, 0x5a3a30, 0.7);
         scene.add(fillLight);
 
         // A small invisible sphere marker can be flipped on for debugging the light position.
@@ -800,9 +800,9 @@
             uniforms: {
                 uTexture: { value: helipadTexture },
                 uLightPos: { value: pointLight.position },
-                uLightColor: { value: new THREE.Color(0.95, 0.93, 0.85) },
-                uAmbientColor: { value: new THREE.Color(0.24, 0.24, 0.24) },
-                uTint: { value: new THREE.Color(0.82, 0.82, 0.82) },
+                uLightColor: { value: new THREE.Color(1.0, 0.78, 0.52) },
+                uAmbientColor: { value: new THREE.Color(0.32, 0.22, 0.22) },
+                uTint: { value: new THREE.Color(0.92, 0.78, 0.70) },
                 uViewPos: { value: camera.position.clone() },
                 uUvScale: { value: new THREE.Vector2(1, 1) },
                 uUvOffset: { value: new THREE.Vector2(0, 0) }
@@ -1460,9 +1460,55 @@
             "0",
             "9"
         ]);
+        // Subset that triggers continuous per-frame motion (everything except the
+        // momentary rotor start/stop keys).
+        const motionKeys = new Set([
+            "arrowleft", "arrowright", "arrowup", "arrowdown",
+            "a", "d", "w", "s", "q", "e", "o", "p"
+        ]);
+
+        // While any motion key is held, drive a requestAnimationFrame loop so the
+        // helicopter and camera advance with real per-frame delta time instead of
+        // jumping once per OS keydown auto-repeat (which felt pixelated/chunky).
+        let motionAnimationId = null;
+        let lastMotionTime = 0;
+
+        function motionLoop(time) {
+            if (lastMotionTime === 0) {
+                lastMotionTime = time;
+            }
+            const delta = Math.min((time - lastMotionTime) / 1000, 0.05);
+            lastMotionTime = time;
+
+            renderScene(delta);
+
+            // Keep looping as long as at least one motion key is still held.
+            let anyHeld = false;
+            for (const key of motionKeys) {
+                if (keyState[key]) {
+                    anyHeld = true;
+                    break;
+                }
+            }
+            if (anyHeld) {
+                motionAnimationId = requestAnimationFrame(motionLoop);
+            } else {
+                motionAnimationId = null;
+                lastMotionTime = 0;
+            }
+        }
+
+        function startMotionLoop() {
+            if (motionAnimationId !== null) {
+                return;
+            }
+            lastMotionTime = 0;
+            motionAnimationId = requestAnimationFrame(motionLoop);
+        }
 
         document.addEventListener("keydown", function (e) {
             const key = e.key.toLowerCase();
+            const wasDown = keyState[key];
             keyState[key] = true;
             if (controlKeys.has(key)) {
                 // Block default browser behavior (arrow-scrolling, etc.) while in control keys.
@@ -1477,9 +1523,11 @@
                     stopHelicopterWingRotation();
                     return;
                 }
-                // For continuous-action keys, render one frame with a small fixed delta
-                // so a single tap still moves things slightly.
-                renderScene(1 / 30);
+                // Spin up the smooth motion loop on the first press; OS auto-repeat
+                // events for the same key are ignored so we don't reset timing.
+                if (!wasDown) {
+                    startMotionLoop();
+                }
             }
         });
 
@@ -1515,12 +1563,12 @@
             // frame-rate independent (speed * delta = distance moved this frame).
 
             // Per-key speeds (units/second or radians/second).
-            const orbitSpeed = 1.6;         // camera angle
-            const zoomSpeed = 7;            // camera distance
-            const heightSpeed = 6;          // camera height
-            const horizontalSpeed = 8;      // helicopter X
-            const forwardSpeed = 8;         // helicopter Z
-            const liftSpeed = 5;            // helicopter Y
+            const orbitSpeed = 0.8;         // camera angle
+            const zoomSpeed = 3.5;          // camera distance
+            const heightSpeed = 3;          // camera height
+            const horizontalSpeed = 3.5;    // helicopter X
+            const forwardSpeed = 3.5;       // helicopter Z
+            const liftSpeed = 2.2;          // helicopter Y
 
             // --- Camera controls ---
             if (keyState["a"]) {
